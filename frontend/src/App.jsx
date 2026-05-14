@@ -19,9 +19,11 @@ export default function App() {
       <header className="app-header">
         <div className="header-inner">
           <div className="logo">
-            <div className="logo-icon">
-              <Zap size={18} strokeWidth={2.5} />
-            </div>
+            <img 
+              src="/Data_Flow_logo.png" 
+              alt="DataFlow Logo" 
+              style={{ height: '32px', width: 'auto', marginRight: '12px' }} 
+            />
             <span className="logo-text">DataFlow</span>
             <span className="logo-badge">v1</span>
           </div>

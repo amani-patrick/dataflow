@@ -82,7 +82,7 @@ export default function CompressTool() {
       {/* Header Panel */}
       <div className="full-panel" style={{ marginBottom: 24, border: '1px solid var(--gray-200)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-          <div className="icon-badge"><Zap size={20} color="var(--orange)" /></div>
+          <img src="/Data_Flow_logo.png" alt="Logo" style={{ height: '32px', width: 'auto' }} />
           <div>
             <h2 style={{ margin: 0, fontFamily: 'Syne', fontSize: '1.2rem' }}>Compress Engine</h2>
             <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--gray-500)' }}>Pro-grade optimization for any data type</p>

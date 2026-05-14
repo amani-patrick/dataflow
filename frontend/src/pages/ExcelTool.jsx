@@ -66,7 +66,7 @@ export default function ExcelTool() {
         <div className="jarvis-main">
           <div className="full-panel" style={{ border: '1px solid var(--gray-200)', minHeight: 500, display: 'flex', flexDirection: 'column' }}>
             <div className="jarvis-header">
-              <div className="orb-small"><Wand2 size={16} color="white" /></div>
+              <img src="/Data_Flow_logo.png" alt="Logo" style={{ height: '24px', width: 'auto' }} />
               <div style={{ fontWeight: 800, fontSize: '0.9rem', letterSpacing: '0.05em' }}>DATAFLOW JARVIS CONSOLE</div>
               <div className="status-dot"></div>
             </div>
