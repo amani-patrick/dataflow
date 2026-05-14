@@ -1,154 +1,137 @@
 import express from 'express';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import * as dfd from 'danfojs-node';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Pipeline Engine
+ * Executes a sequence of data operations using Danfo.js
+ */
+async function runPipeline(dataframes, pipeline) {
+  let df = dataframes.length > 1 
+    ? dfd.concat({ df_list: dataframes, axis: 0 }) 
+    : dataframes[0];
+
+  for (const step of pipeline) {
+    const { action, params } = step;
+
+    switch (action) {
+      case 'fill_missing':
+        df.fillNa(params.value, { inplace: true });
+        break;
+
+      case 'drop_duplicates':
+        df.dropDuplicates({ keep: 'first', inplace: true });
+        break;
+
+      case 'drop_columns':
+        df.drop({ columns: params.columns, inplace: true });
+        break;
+
+      case 'group_by':
+        const group = df.groupBy(params.columns);
+        const aggMap = {};
+        params.aggregations.forEach(a => {
+          aggMap[a.column] = [a.method];
+        });
+        df = group.agg(aggMap);
+        break;
+
+      case 'sort':
+        df.sortValues(params.column, { ascending: params.direction === 'asc', inplace: true });
+        break;
+
+      case 'trim':
+        // Custom string trim for all object columns
+        df.columns.forEach(col => {
+          if (df[col].dtype === 'string') {
+            const trimmed = df[col].values.map(v => typeof v === 'string' ? v.trim() : v);
+            df.addColumn(col, trimmed, { atIndex: df.columns.indexOf(col) });
+          }
+        });
+        break;
+
+      case 'filter':
+        // Basic filter logic
+        const { column, operator, value } = params;
+        if (operator === '==') df = df.loc({ rows: df[column].eq(value) });
+        else if (operator === '>') df = df.loc({ rows: df[column].gt(value) });
+        else if (operator === '<') df = df.loc({ rows: df[column].lt(value) });
+        break;
+        
+      default:
+        console.warn(`Unknown pipeline action: ${action}`);
+    }
+  }
+
+  return df;
+}
 
 export default function excelRoutes(upload) {
   const router = express.Router();
 
-  // Parse uploaded excel files and return preview data
-  router.post('/preview', upload.array('files', 10), (req, res) => {
+  // Unified pipeline processing
+  router.post('/process', upload.array('files', 20), async (req, res) => {
     try {
-      const results = req.files.map((file) => {
+      const pipeline = req.body.pipeline ? JSON.parse(req.body.pipeline) : [];
+      const dataframes = [];
+
+      for (const file of req.files) {
         const wb = XLSX.readFile(file.path);
-        const sheets = wb.SheetNames.map((name) => {
-          const ws = wb.Sheets[name];
-          const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
-          const headers = data.length > 0 ? Object.keys(data[0]) : [];
-          return { name, headers, rows: data.slice(0, 50), totalRows: data.length };
-        });
+        const firstSheet = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(firstSheet);
+        dataframes.push(new dfd.DataFrame(json));
         fs.unlinkSync(file.path);
-        return { filename: file.originalname, sheets };
+      }
+
+      if (dataframes.length === 0) throw new Error('No files uploaded');
+
+      const resultDf = await runPipeline(dataframes, pipeline);
+
+      const outPath = path.join(__dirname, '../../uploads/', `dataflow_result_${Date.now()}.xlsx`);
+      
+      // Convert Danfo DataFrame back to Excel
+      const resultJson = dfd.toJSON(resultDf);
+      const ws = XLSX.utils.json_to_sheet(resultJson);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Result');
+      XLSX.writeFile(wb, outPath);
+
+      res.download(outPath, 'dataflow_processed.xlsx', () => {
+        fs.unlink(outPath, () => {});
       });
-      res.json({ success: true, files: results });
     } catch (err) {
+      console.error('Excel Pipeline Error:', err);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // Merge multiple sheets/files, fill missing, sort, compute totals
-  router.post('/process', upload.array('files', 10), (req, res) => {
+  // Health check/Stats
+  router.post('/stats', upload.array('files', 10), async (req, res) => {
     try {
-      const options = req.body.options ? JSON.parse(req.body.options) : {};
-      const {
-        mergeAll = true,
-        fillMissing = '',
-        sortBy = null,
-        sortDir = 'asc',
-        removeDuplicates = false,
-        sumFields = [],
-        removeColumns = [],
-      } = options;
-
-      let combined = [];
-      let allHeaders = new Set();
-
-      req.files.forEach((file) => {
+      const stats = [];
+      for (const file of req.files) {
         const wb = XLSX.readFile(file.path);
-        wb.SheetNames.forEach((name) => {
-          const ws = wb.Sheets[name];
-          const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
-          data.forEach((row) => Object.keys(row).forEach((k) => allHeaders.add(k)));
-          combined.push(...data);
-        });
-        fs.unlinkSync(file.path);
-      });
-
-      const headers = [...allHeaders].filter((h) => !removeColumns.includes(h));
-
-      // Normalize rows — fill missing fields
-      combined = combined.map((row) => {
-        const norm = {};
-        headers.forEach((h) => {
-          norm[h] = row[h] !== undefined && row[h] !== '' ? row[h] : fillMissing;
-        });
-        return norm;
-      });
-
-      // Remove duplicates
-      if (removeDuplicates) {
-        const seen = new Set();
-        combined = combined.filter((row) => {
-          const key = JSON.stringify(row);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      }
-
-      // Sort
-      if (sortBy && headers.includes(sortBy)) {
-        combined.sort((a, b) => {
-          const va = a[sortBy], vb = b[sortBy];
-          const numA = parseFloat(va), numB = parseFloat(vb);
-          if (!isNaN(numA) && !isNaN(numB)) {
-            return sortDir === 'asc' ? numA - numB : numB - numA;
-          }
-          return sortDir === 'asc'
-            ? String(va).localeCompare(String(vb))
-            : String(vb).localeCompare(String(va));
-        });
-      }
-
-      // Sum row for numeric fields
-      let summaryRow = null;
-      if (sumFields.length > 0) {
-        summaryRow = {};
-        headers.forEach((h) => {
-          if (sumFields.includes(h)) {
-            summaryRow[h] = combined.reduce((acc, row) => {
-              const n = parseFloat(row[h]);
-              return acc + (isNaN(n) ? 0 : n);
-            }, 0);
-          } else {
-            summaryRow[h] = h === headers[0] ? 'TOTAL' : '';
-          }
-        });
-        combined.push(summaryRow);
-      }
-
-      // Build output workbook
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(combined, { header: headers });
-
-      // Style header row
-      const range = XLSX.utils.decode_range(ws['!ref']);
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        const cell = XLSX.utils.encode_cell({ r: 0, c });
-        if (ws[cell]) {
-          ws[cell].s = {
-            font: { bold: true, color: { rgb: 'FFFFFF' } },
-            fill: { fgColor: { rgb: 'E8692A' } },
-            alignment: { horizontal: 'center' },
+        const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        const df = new dfd.DataFrame(json);
+        
+        const colStats = {};
+        df.columns.forEach(col => {
+          colStats[col] = {
+            type: df[col].dtype,
+            nullCount: df[col].isna().sum(),
+            uniqueCount: df[col].unique().shape[0],
           };
-        }
+        });
+        
+        stats.push({ filename: file.originalname, columns: colStats, rowCount: df.shape[0] });
+        fs.unlinkSync(file.path);
       }
-
-      // Highlight total row if present
-      if (summaryRow) {
-        const lastRow = combined.length;
-        for (let c = range.s.c; c <= range.e.c; c++) {
-          const cell = XLSX.utils.encode_cell({ r: lastRow, c });
-          if (ws[cell]) {
-            ws[cell].s = {
-              font: { bold: true },
-              fill: { fgColor: { rgb: 'FFF3E0' } },
-            };
-          }
-        }
-      }
-
-      XLSX.utils.book_append_sheet(wb, ws, 'Merged');
-
-      const outPath = path.join(__dirname, '../../uploads/', `dataflow_${Date.now()}.xlsx`);
-      XLSX.writeFile(wb, outPath, { bookSST: false });
-
-      res.download(outPath, 'dataflow_merged.xlsx', () => {
-        fs.unlink(outPath, () => {});
-      });
+      res.json({ success: true, stats });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
