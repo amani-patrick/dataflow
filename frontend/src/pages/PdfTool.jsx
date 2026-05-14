@@ -9,6 +9,29 @@ export default function PdfTool() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+
+  const startAnalysis = async () => {
+    if (!files.length) return;
+    setAnalyzing(true);
+    setStatus(null);
+    try {
+      const fd = new FormData();
+      fd.append('files', files[0]);
+      const res = await fetch(`${API}/api/pdf/analyze`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success) {
+        setPreviewData(data);
+        setStatus({ 
+          type: 'success', 
+          msg: `Jarvis detected ${data.rowCount} rows and ${data.images.length} graphical elements (logos/icons).` 
+        });
+      }
+    } catch (err) {
+      setStatus({ type: 'error', msg: 'Structural analysis failed.' });
+    }
+    setAnalyzing(false);
+  };
 
   const handleConvert = async () => {
     if (!files.length) return;
@@ -32,14 +55,6 @@ export default function PdfTool() {
     setLoading(false);
   };
 
-  const startAnalysis = () => {
-    setAnalyzing(true);
-    setTimeout(() => {
-      setAnalyzing(false);
-      setStatus({ type: 'success', msg: 'Analysis complete: Jarvis identified a complex table structure with high confidence.' });
-    }, 1500);
-  };
-
   return (
     <div className="pdf-stark-container">
       <div className="full-panel" style={{ marginBottom: 24, border: '1px solid var(--gray-200)' }}>
@@ -59,7 +74,7 @@ export default function PdfTool() {
         <DropZone
           accept=".pdf"
           files={files}
-          onFiles={(newFiles) => { setFiles(newFiles); setStatus(null); }}
+          onFiles={(newFiles) => { setFiles(newFiles); setStatus(null); setPreviewData(null); }}
           label="Initialize PDF documents for structural analysis"
         />
 
@@ -67,7 +82,7 @@ export default function PdfTool() {
           <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
             <button className="btn-jarvis-secondary" onClick={startAnalysis} disabled={analyzing || loading}>
               {analyzing ? <RefreshCw size={16} className="spin" /> : <Eye size={16} />}
-              {analyzing ? 'Analyzing...' : 'Preview Structure'}
+              {analyzing ? 'Analyzing Structure...' : 'Preview Structure'}
             </button>
             <button className="btn-jarvis-primary" onClick={handleConvert} disabled={loading || analyzing}>
               {loading ? <span className="spinner-white" /> : <Wand2 size={16} />}
@@ -87,21 +102,29 @@ export default function PdfTool() {
         </div>
       )}
 
-      {files.length > 0 && !analyzing && status?.type === 'success' && (
+      {previewData && (
         <div className="table-preview-mock">
           <div className="preview-header">
-            <Layout size={14} /> Positional Alignment Map (X/Y)
+            <Layout size={14} /> Structural Alignment Map (X/Y)
           </div>
+          
+          {previewData.images.length > 0 && (
+            <div className="logo-alert">
+              <AlertCircle size={14} />
+              <span>Jarvis found <strong>{previewData.images.length} logo/images</strong>. These will be ignored during Excel conversion to keep your data clean.</span>
+            </div>
+          )}
+
           <div className="grid-placeholder">
-            {[...Array(5)].map((_, i) => (
+            {previewData.rows.slice(0, 8).map((row, i) => (
               <div key={i} className="grid-row-mock">
-                {[...Array(6)].map((_, j) => (
-                  <div key={j} className="grid-cell-mock" style={{ width: `${Math.random() * 40 + 80}px`, opacity: 0.3 + (Math.random() * 0.5) }}></div>
+                {row.map((cell, j) => (
+                  <div key={j} className="grid-cell-mock" title={cell} style={{ width: `${Math.min(cell.length * 8, 150)}px`, opacity: 0.6 }}></div>
                 ))}
               </div>
             ))}
           </div>
-          <div className="preview-footer">Jarvis has successfully clustered text elements into a logical table grid.</div>
+          <div className="preview-footer">Showing first {previewData.rows.length} rows detected across {files.length} pages.</div>
         </div>
       )}
 
@@ -117,6 +140,7 @@ export default function PdfTool() {
         .pdf-status-card.error { background: #fef2f2; color: #991b1b; border: 1px solid #fee2e2; }
         .table-preview-mock { margin-top: 24px; background: #fafafa; border: 1px solid var(--gray-200); border-radius: 16px; padding: 20px; box-shadow: inset 0 2px 10px rgba(0,0,0,0.02); }
         .preview-header { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gray-400); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .logo-alert { background: #fffbeb; border: 1px solid #fde68a; padding: 10px 14px; border-radius: 10px; font-size: 0.75rem; color: #92400e; display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
         .grid-placeholder { display: flex; flex-direction: column; gap: 10px; }
         .grid-row-mock { display: flex; gap: 10px; }
         .grid-cell-mock { height: 14px; background: var(--gray-300); border-radius: 4px; }
