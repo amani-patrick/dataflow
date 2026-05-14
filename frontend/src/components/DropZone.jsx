@@ -62,7 +62,7 @@ export default function DropZone({ accept, multiple = true, files, onFiles, labe
           {files.map((f, i) => (
             <div key={i} className="file-chip">
               <File size={14} color="var(--orange)" />
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap-' }}>
                 {f.name}
               </span>
               <span style={{ color: 'var(--gray-500)', fontSize: '0.7rem', flexShrink: 0 }}>
