@@ -8,8 +8,8 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Advanced PDF Table Parser
- * Uses positional data (x, y coordinates) to reconstruct tables
+ * Advanced PDF Table Parser (Log-Aware Version)
+ * Uses positional data with vertical continuity checking for multi-line entries
  */
 async function parsePdfToRows(filePath) {
   return new Promise((resolve, reject) => {
@@ -18,21 +18,40 @@ async function parsePdfToRows(filePath) {
     pdfParser.on('pdfParser_dataError', (errData) => reject(errData.parserError));
     pdfParser.on('pdfParser_dataReady', (pdfData) => {
       const rows = [];
+      const images = [];
       
-      // Iterate through pages
-      pdfData.Pages.forEach((page) => {
+      pdfData.Pages.forEach((page, pageIdx) => {
+        // Capture Text
         const textElements = page.Texts.map((t) => ({
           x: t.x,
           y: t.y,
           text: decodeURIComponent(t.R[0].T),
           w: t.w,
+          page: pageIdx
         }));
 
-        if (textElements.length === 0) return;
+        // Capture Images (if any)
+        if (page.Images) {
+          page.Images.forEach(img => {
+            images.push({
+              x: img.x,
+              y: img.y,
+              w: img.w,
+              h: img.h,
+              page: pageIdx,
+              type: 'image/logo'
+            });
+          });
+        }
 
-        // Group by Y coordinate (rows) with a small threshold
-        const yThreshold = 0.5; 
+        if (textElements.length === 0) return;
+        
+        // ... (rest of the clustering logic)
+
+        // Group by Y coordinate (rows)
         const yGroups = [];
+        // Logs often have very tight line spacing, so we use a tighter threshold
+        const yThreshold = 0.35; 
         
         textElements.sort((a, b) => a.y - b.y).forEach((el) => {
           let group = yGroups.find((g) => Math.abs(g.y - el.y) < yThreshold);
@@ -43,23 +62,35 @@ async function parsePdfToRows(filePath) {
           group.elements.push(el);
         });
 
-        // For each Y group, sort by X and identify cells
-        yGroups.forEach((group) => {
+        // Vertical Continuity: For logs, if two Y groups are extremely close, they are likely the same row
+        const mergedYGroups = [];
+        yGroups.forEach((group, i) => {
+          if (i > 0 && (group.y - yGroups[i-1].y) < 0.45) {
+            mergedYGroups[mergedYGroups.length - 1].elements.push(...group.elements);
+          } else {
+            mergedYGroups.push(group);
+          }
+        });
+
+        mergedYGroups.forEach((group) => {
           group.elements.sort((a, b) => a.x - b.x);
           
-          // Cluster elements that are very close horizontally into single cells
-          const xThreshold = 1.0;
+          // Adaptive X Clustering
+          const xThreshold = 1.2;
           const cells = [];
           group.elements.forEach((el) => {
-            if (cells.length > 0 && (el.x - (cells[cells.length - 1].x + cells[cells.length - 1].w)) < xThreshold) {
-              cells[cells.length - 1].text += ' ' + el.text;
-              cells[cells.length - 1].w += el.w;
+            const lastCell = cells[cells.length - 1];
+            if (lastCell && (el.x - (lastCell.x + lastCell.w)) < xThreshold) {
+              lastCell.text += ' ' + el.text;
+              lastCell.w = Math.max(lastCell.w, (el.x + el.w) - lastCell.x);
             } else {
               cells.push({ ...el });
             }
           });
           
-          rows.push(cells.map(c => c.text.trim()));
+          if (cells.length > 0) {
+            rows.push(cells.map(c => c.text.trim()));
+          }
         });
       });
 
@@ -73,15 +104,20 @@ async function parsePdfToRows(filePath) {
 function rowsToObjects(rows) {
   if (rows.length === 0) return { headers: [], data: [] };
   
-  // Find the row with the most cells to determine column count
-  const maxCols = Math.max(...rows.map((r) => r.length));
-  
-  // Heuristic: The first row with many columns is likely the header
-  let headerIndex = rows.findIndex(r => r.length >= maxCols * 0.7);
+  // LOG DETECTION: Find the row that appears most frequently in terms of column count
+  const counts = {};
+  rows.forEach(r => counts[r.length] = (counts[r.length] || 0) + 1);
+  const commonColCount = parseInt(Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b));
+
+  // Find the first row that matches this common count - likely the header
+  let headerIndex = rows.findIndex(r => r.length === commonColCount);
   if (headerIndex === -1) headerIndex = 0;
 
   const rawHeaders = rows[headerIndex];
-  const headers = rawHeaders.map((h, i) => h || `Column_${i + 1}`);
+  const headers = rawHeaders.map((h, i) => {
+    const clean = String(h).replace(/[^\w\s]/gi, '').trim();
+    return clean || `Field_${i + 1}`;
+  });
 
   const data = rows.slice(headerIndex + 1)
     .filter(row => row.length > 0)
