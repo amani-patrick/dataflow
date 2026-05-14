@@ -92,7 +92,11 @@ export default function excelRoutes(upload) {
 
       const resultDf = await runPipeline(dataframes, pipeline);
 
-      const outPath = path.join(__dirname, '../../uploads/', `dataflow_result_${Date.now()}.xlsx`);
+      const fileName = `excel_result_${Date.now()}.xlsx`;
+      const outputDir = path.join(__dirname, '../../uploads/outputs/');
+      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+      
+      const outPath = path.join(outputDir, fileName);
       
       // Convert Danfo DataFrame back to Excel
       const resultJson = dfd.toJSON(resultDf);
@@ -101,12 +105,28 @@ export default function excelRoutes(upload) {
       XLSX.utils.book_append_sheet(wb, ws, 'Result');
       XLSX.writeFile(wb, outPath);
 
-      res.download(outPath, 'dataflow_processed.xlsx', () => {
-        fs.unlink(outPath, () => {});
+      // Auto-cleanup after 1 hour
+      setTimeout(() => {
+        if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+      }, 3600000);
+
+      res.json({ 
+        success: true, 
+        downloadUrl: `/api/excel/download/${fileName}`,
+        fileName 
       });
     } catch (err) {
       console.error('Excel Pipeline Error:', err);
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.get('/download/:filename', (req, res) => {
+    const filePath = path.join(__dirname, '../../uploads/outputs/', req.params.filename);
+    if (fs.existsSync(filePath)) {
+      res.download(filePath);
+    } else {
+      res.status(404).send('File expired or not found.');
     }
   });
 

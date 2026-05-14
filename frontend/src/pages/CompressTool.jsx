@@ -41,6 +41,8 @@ export default function CompressTool() {
     return { algo: 'zip', reason: 'Balanced mix. Standard ZIP is your best all-rounder.' };
   }, [files, totalSize]);
 
+  const [vault, setVault] = useState([]);
+
   const handleCompress = async () => {
     if (!files.length) return;
     setLoading(true);
@@ -61,19 +63,14 @@ export default function CompressTool() {
       }
 
       const res = await fetch(`${API}${endpoint}`, { method: 'POST', body: fd });
-      if (!res.ok) { setStatus({ type: 'error', msg: 'Compression failed.' }); setLoading(false); return; }
-      
-      const blob = await res.blob();
-      const compressedSize = blob.size;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `dataflow_compressed_${Date.now()}${mode === 'images' ? '.zip' : (ALGORITHMS.find(a => a.id === selectedAlgo)?.id === 'zip' ? '.zip' : '.tar.gz')}`;
-      a.click();
-      URL.revokeObjectURL(url);
-      
-      const saved = totalSize > compressedSize ? Math.round((1 - compressedSize / totalSize) * 100) : 0;
-      setStatus({ type: 'success', msg: `Done! ${fmtSize(compressedSize)} · saved ~${saved}%.` });
+      const data = await res.json();
+
+      if (data.success) {
+        setVault([ { url: data.downloadUrl, name: data.fileName, time: new Date().toLocaleTimeString() }, ...vault ]);
+        setStatus({ type: 'success', msg: `Optimization complete. Result stored in Vault.` });
+      } else {
+        setStatus({ type: 'error', msg: 'Compression failed.' });
+      }
     } catch {
       setStatus({ type: 'error', msg: 'Could not reach server.' });
     }
@@ -231,6 +228,26 @@ export default function CompressTool() {
             </button>
           </div>
         </>
+      )}
+
+      {/* Vault Panel */}
+      {vault.length > 0 && (
+        <div className="vault-panel">
+          <div className="panel-label"><Shield size={16} color="var(--orange)" /> Output Vault</div>
+          <div className="vault-list">
+            {vault.map((item, i) => (
+              <div key={i} className="vault-item">
+                <div className="v-info">
+                  <div className="v-name">{item.name}</div>
+                  <div className="v-time">Processed at {item.time} · Expiring in 1hr</div>
+                </div>
+                <a href={`${API}${item.url}`} className="v-btn" target="_blank" rel="noreferrer">
+                  <Download size={14} /> Download
+                </a>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       <style>{`

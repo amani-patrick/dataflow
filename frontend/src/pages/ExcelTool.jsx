@@ -1,307 +1,210 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { 
-  Settings, Table, Download, RefreshCw, Trash2, Plus, 
-  FileText, MessageSquare, Play, History, ChevronRight, 
-  LayoutDashboard, Info, AlertCircle, CheckCircle2, 
-  Search, Wand2, ArrowRight, BarChart3, Database, Filter
-} from 'lucide-react';
+import { useState } from 'react';
+import { Terminal, Play, Save, Trash2, Wand2, Zap, Layout, FileSpreadsheet, Shield, Download, Info, AlertCircle } from 'lucide-react';
 import DropZone from '../components/DropZone.jsx';
-import * as XLSX from 'xlsx';
 
 const API = import.meta.env.VITE_API_URL || '';
 
 export default function ExcelTool() {
   const [files, setFiles] = useState([]);
-  const [preview, setPreview] = useState(null);
-  const [stats, setStats] = useState(null);
-  const [pipeline, setPipeline] = useState([]);
   const [command, setCommand] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState(null);
-  const [activeTab, setActiveTab] = useState('pipeline'); // 'pipeline' | 'insights' | 'preview'
+  const [pipeline, setPipeline] = useState([]);
+  const [executing, setExecuting] = useState(false);
+  const [insights, setInsights] = useState([]);
+  const [vault, setVault] = useState([]);
 
-  const totalRows = stats?.reduce((a, s) => a + s.rowCount, 0) || 0;
-  const totalCols = stats?.[0] ? Object.keys(stats[0].columns).length : 0;
-
-  // Natural Language Parser (The "Jarvis" Brain)
-  const processCommand = (cmd) => {
-    const c = cmd.toLowerCase();
-    let newStep = null;
-
-    if (c.includes('group by') || c.includes('summarize')) {
-      const match = c.match(/group by ([\w\s,]+)/);
-      const cols = match ? match[1].split(',').map(s => s.trim()) : [];
-      newStep = { 
-        action: 'group_by', 
-        params: { columns: cols, aggregations: [{ column: 'Amount', method: 'sum' }] },
-        label: `Group by ${cols.join(', ')}`
-      };
-    } else if (c.includes('remove column') || c.includes('drop')) {
-      const match = c.match(/(?:remove|drop) ([\w\s,]+)/);
-      const cols = match ? match[1].split(',').map(s => s.trim()) : [];
-      newStep = { action: 'drop_columns', params: { columns: cols }, label: `Drop columns: ${cols.join(', ')}` };
-    } else if (c.includes('remove duplicates') || c.includes('dedup')) {
-      newStep = { action: 'drop_duplicates', params: {}, label: 'Remove duplicates' };
-    } else if (c.includes('fill') && c.includes('with')) {
-      const val = c.match(/with (['"]?)(.*?)\1/)?.[2] || '0';
-      newStep = { action: 'fill_missing', params: { value: val }, label: `Fill empty with "${val}"` };
-    } else if (c.includes('trim') || c.includes('clean spaces')) {
-      newStep = { action: 'trim', params: {}, label: 'Trim whitespace' };
-    }
-
-    if (newStep) {
-      setPipeline([...pipeline, newStep]);
-      setCommand('');
-      setStatus({ type: 'success', msg: `Jarvis added step: ${newStep.label}` });
-    } else {
-      setStatus({ type: 'error', msg: "I didn't quite catch that. Try 'group by District' or 'remove duplicates'." });
-    }
-  };
-
-  const handlePreview = async () => {
+  const analyzeFiles = async (files) => {
     if (!files.length) return;
-    setLoading(true);
     try {
-      const results = await Promise.all(files.map(async (file) => {
-        const data = await file.arrayBuffer();
-        const wb = XLSX.read(data, { type: 'array' });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-        return { filename: file.name, rows: json.slice(0, 10), headers: Object.keys(json[0] || {}) };
-      }));
-      setPreview(results);
-      
-      // Fetch stats from backend
       const fd = new FormData();
       files.forEach(f => fd.append('files', f));
       const res = await fetch(`${API}/api/excel/stats`, { method: 'POST', body: fd });
       const data = await res.json();
-      if (data.success) setStats(data.stats);
-    } catch (err) {
-      console.error(err);
-      setStatus({ type: 'error', msg: 'Failed to analyze files.' });
-    }
-    setLoading(false);
+      if (data.success) {
+        setInsights(Object.entries(data.stats[0].columns).map(([k, v]) => ({ column: k, ...v })));
+      }
+    } catch (err) { console.error(err); }
   };
 
-  const handleRun = async () => {
-    setLoading(true);
+  const addStep = () => {
+    if (!command.trim()) return;
+    // Simple NL parsing mock - in a real app this would call an LLM endpoint
+    let type = 'clean';
+    let params = { action: command };
+    
+    if (command.toLowerCase().includes('group')) type = 'group_by';
+    else if (command.toLowerCase().includes('filter')) type = 'filter';
+    else if (command.toLowerCase().includes('sort')) type = 'sort';
+
+    setPipeline([...pipeline, { type, params, label: command }]);
+    setCommand('');
+  };
+
+  const removeStep = (index) => setPipeline(pipeline.filter((_, i) => i !== index));
+
+  const handleExecute = async () => {
+    if (!files.length) return;
+    setExecuting(true);
     try {
       const fd = new FormData();
       files.forEach(f => fd.append('files', f));
       fd.append('pipeline', JSON.stringify(pipeline));
-      
+
       const res = await fetch(`${API}/api/excel/process`, { method: 'POST', body: fd });
-      if (!res.ok) throw new Error('Processing failed');
+      const data = await res.json();
       
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'dataflow_jarvis_result.xlsx'; a.click();
-      URL.revokeObjectURL(url);
-      setStatus({ type: 'success', msg: 'Optimization complete. File downloaded!' });
-    } catch (err) {
-      setStatus({ type: 'error', msg: err.message });
-    }
-    setLoading(false);
+      if (data.success) {
+        setVault([{ url: data.downloadUrl, name: data.fileName, time: new Date().toLocaleTimeString() }, ...vault]);
+        setCommand('');
+      }
+    } catch (err) { console.error(err); }
+    setExecuting(false);
   };
 
   return (
     <div className="jarvis-container">
-      {/* Top Console */}
-      <div className="glass-panel main-console">
-        <div className="console-header">
-          <div className="brand">
-            <div className="jarvis-orb"></div>
-            <span>DATAFLOW <span className="highlight">JARVIS</span></span>
-          </div>
-          <div className="console-stats">
-            <div className="stat-item"><Database size={14} /> {files.length} Files</div>
-            <div className="stat-item"><Table size={14} /> {totalRows.toLocaleString()} Rows</div>
-            <div className="stat-item"><LayoutDashboard size={14} /> {totalCols} Fields</div>
-          </div>
-        </div>
+      <div className="jarvis-grid">
+        <div className="jarvis-main">
+          <div className="full-panel" style={{ border: '1px solid var(--gray-200)', minHeight: 500, display: 'flex', flexDirection: 'column' }}>
+            <div className="jarvis-header">
+              <div className="orb-small"><Wand2 size={16} color="white" /></div>
+              <div style={{ fontWeight: 800, fontSize: '0.9rem', letterSpacing: '0.05em' }}>DATAFLOW JARVIS CONSOLE</div>
+              <div className="status-dot"></div>
+            </div>
 
-        <DropZone
-          accept=".xlsx,.xls,.csv"
-          files={files}
-          onFiles={setFiles}
-          label="Initialize files into the DataFlow workspace"
-        />
-
-        {files.length > 0 && !preview && (
-          <button className="btn-jarvis-start" onClick={handlePreview}>
-            <Wand2 size={18} /> Analyze Workspace
-          </button>
-        )}
-      </div>
-
-      {preview && (
-        <div className="workspace-layout">
-          {/* Main Area */}
-          <div className="workspace-main">
-            {/* Jarvis Command Bar */}
-            <div className="command-bar-wrap">
-              <MessageSquare size={20} className="command-icon" />
+            <div className="command-wrapper">
+              <Terminal size={18} className="term-icon" />
               <input 
                 type="text" 
-                placeholder="Talk to Jarvis... 'group by category', 'remove duplicates', 'trim all columns'" 
+                className="jarvis-input"
+                placeholder="What should I do with this data?"
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && processCommand(command)}
+                onKeyDown={(e) => e.key === 'Enter' && addStep()}
               />
-              <button onClick={() => processCommand(command)}><ArrowRight size={18} /></button>
+              <button className="btn-add-step" onClick={addStep}>Add Step</button>
             </div>
 
-            {/* Tab Navigation */}
-            <div className="tab-nav">
-              <button className={activeTab === 'pipeline' ? 'active' : ''} onClick={() => setActiveTab('pipeline')}><History size={16} /> Pipeline</button>
-              <button className={activeTab === 'insights' ? 'active' : ''} onClick={() => setActiveTab('insights')}><BarChart3 size={16} /> Insights</button>
-              <button className={activeTab === 'preview' ? 'active' : ''} onClick={() => setActiveTab('preview')}><Search size={16} /> Data View</button>
-            </div>
-
-            <div className="tab-content">
-              {activeTab === 'pipeline' && (
-                <div className="pipeline-view">
-                  {pipeline.length === 0 ? (
-                    <div className="empty-pipeline">
-                      <Sparkles size={48} color="var(--orange-pale)" />
-                      <p>Your pipeline is empty. Give Jarvis a command to begin.</p>
+            <div className="pipeline-workspace">
+              <div className="pipeline-label">ACTIVE OPERATIONS</div>
+              <div className="pipeline-list">
+                {pipeline.length === 0 ? (
+                  <div className="empty-pipeline">
+                    <Zap size={32} strokeWidth={1} style={{ marginBottom: 12, opacity: 0.3 }} />
+                    <p>No operations queued. Use the command bar above to start.</p>
+                  </div>
+                ) : (
+                  pipeline.map((step, i) => (
+                    <div key={i} className="pipeline-step-card">
+                      <div className="step-num">{i + 1}</div>
+                      <div className="step-body">
+                        <div className="step-type">{step.type.replace('_', ' ')}</div>
+                        <div className="step-details">{step.label}</div>
+                      </div>
+                      <button className="step-remove" onClick={() => removeStep(i)}>×</button>
                     </div>
-                  ) : (
-                    <div className="pipeline-list">
-                      {pipeline.map((step, i) => (
-                        <div key={i} className="pipeline-step">
-                          <div className="step-index">{i + 1}</div>
-                          <div className="step-label">{step.label}</div>
-                          <button className="step-remove" onClick={() => setPipeline(pipeline.filter((_, idx) => idx !== i))}>✕</button>
-                        </div>
-                      ))}
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 'auto', paddingTop: 20 }}>
+              <DropZone
+                accept=".xlsx,.xls,.csv"
+                files={files}
+                onFiles={(newFiles) => { setFiles(newFiles); analyzeFiles(newFiles); }}
+                label="Initialize core datasets"
+              />
+              
+              {pipeline.length > 0 && (
+                <button className="btn-execute" onClick={handleExecute} disabled={executing || !files.length}>
+                  {executing ? <span className="spinner-white" /> : <Play size={16} fill="white" />}
+                  {executing ? 'Executing Pipeline...' : 'Execute Operations'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {vault.length > 0 && (
+            <div className="vault-panel">
+              <div className="panel-label" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', fontWeight: 800, color: 'var(--gray-500)', marginBottom: 12 }}>
+                <Shield size={14} color="var(--orange)" /> OUTPUT VAULT
+              </div>
+              <div className="vault-list">
+                {vault.map((item, i) => (
+                  <div key={i} className="vault-item">
+                    <div className="v-info">
+                      <div className="v-name">{item.name}</div>
+                      <div className="v-time">Processed at {item.time} · Expiring in 1hr</div>
+                    </div>
+                    <a href={`${API}${item.url}`} className="v-btn" target="_blank" rel="noreferrer">
+                      <Download size={14} /> Download
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="jarvis-sidebar">
+          <div className="panel-label" style={{ marginBottom: 16 }}>FIELD ANALYTICS</div>
+          <div className="insight-list">
+            {insights.length === 0 ? (
+              <div style={{ color: 'var(--gray-400)', fontSize: '0.8rem', textAlign: 'center', padding: '40px 0' }}>
+                Upload files to see field insights
+              </div>
+            ) : (
+              insights.map((insight, i) => (
+                <div key={i} className="insight-card">
+                  <div className="insight-field">{insight.column}</div>
+                  <div className="insight-meta">
+                    <div className="tag">{insight.type}</div>
+                    <span>{insight.unique} unique</span>
+                  </div>
+                  {insight.missing > 0 && (
+                    <div className="insight-alert">
+                      <AlertCircle size={12} /> {insight.missing} missing
                     </div>
                   )}
                 </div>
-              )}
-
-              {activeTab === 'insights' && stats && (
-                <div className="insights-grid">
-                  {Object.entries(stats[0].columns).map(([name, info]) => (
-                    <div key={name} className="insight-card">
-                      <div className="insight-title">{name}</div>
-                      <div className="insight-body">
-                        <div className="insight-row"><span>Type:</span> <strong>{info.type}</strong></div>
-                        <div className="insight-row"><span>Unique:</span> <strong>{info.uniqueCount}</strong></div>
-                        <div className="insight-row"><span>Missing:</span> <strong className={info.nullCount > 0 ? 'alert' : ''}>{info.nullCount}</strong></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {activeTab === 'preview' && (
-                <div className="data-view">
-                  {preview.map((f, fi) => (
-                    <div key={fi} className="file-preview-block">
-                      <div className="file-title"><FileText size={14} /> {f.filename}</div>
-                      <div className="table-mini-wrap">
-                        <table>
-                          <thead>
-                            <tr>{f.headers.map(h => <th key={h}>{h}</th>)}</tr>
-                          </thead>
-                          <tbody>
-                            {f.rows.map((row, ri) => (
-                              <tr key={ri}>
-                                {f.headers.map(h => <td key={h}>{String(row[h])}</td>)}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Sidebar: Execution */}
-          <div className="workspace-sidebar">
-            <div className="sidebar-header">Finalize Workspace</div>
-            <div className="sidebar-stats">
-              <div className="s-stat"><span>Steps</span> <strong>{pipeline.length}</strong></div>
-              <div className="s-stat"><span>Status</span> <strong style={{ color: 'var(--green)' }}>Healthy</strong></div>
-            </div>
-            
-            <button className="btn-run-all" onClick={handleRun} disabled={loading || pipeline.length === 0}>
-              {loading ? <span className="spinner-white" /> : <Play size={18} />}
-              Execute Pipeline
-            </button>
-
-            {status && (
-              <div className={`jarvis-status ${status.type}`}>
-                {status.type === 'error' ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
-                {status.msg}
-              </div>
+              ))
             )}
           </div>
         </div>
-      )}
+      </div>
 
       <style>{`
-        .jarvis-container { max-width: 1200px; margin: 0 auto; animation: slideUp 0.5s ease-out; }
-        .main-console { padding: 24px; margin-bottom: 24px; border: 1px solid rgba(255,255,255,0.1); }
-        .console-header { display: flex; justify-content: space-between; align-items: center; marginBottom: 20px; }
-        .brand { display: flex; align-items: center; gap: 12px; font-family: Syne; font-weight: 800; font-size: 1.2rem; letter-spacing: 0.1em; }
-        .highlight { color: var(--orange); }
-        .jarvis-orb { width: 16px; height: 16px; background: radial-gradient(circle, var(--orange), transparent); border-radius: 50%; box-shadow: 0 0 15px var(--orange); animation: pulse 2s infinite; }
-        .console-stats { display: flex; gap: 16px; font-size: 0.75rem; color: var(--gray-500); }
-        .stat-item { display: flex; align-items: center; gap: 6px; }
-        .btn-jarvis-start { width: 100%; margin-top: 20px; padding: 14px; background: var(--black); color: white; border: none; border-radius: 12px; font-family: Syne; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.2s; }
-        .btn-jarvis-start:hover { background: #333; transform: scale(1.01); }
-        
-        .workspace-layout { display: flex; gap: 24px; align-items: flex-start; }
-        .workspace-main { flex: 1; }
-        .command-bar-wrap { background: white; border: 2px solid var(--gray-100); border-radius: 16px; padding: 12px 20px; display: flex; align-items: center; gap: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); margin-bottom: 24px; }
-        .command-bar-wrap input { flex: 1; border: none; outline: none; font-size: 1rem; color: var(--black); }
-        .command-bar-wrap button { background: var(--orange); color: white; border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-        
-        .tab-nav { display: flex; gap: 12px; margin-bottom: 20px; border-bottom: 1px solid var(--gray-100); padding-bottom: 8px; }
-        .tab-nav button { background: transparent; border: none; padding: 8px 16px; font-weight: 600; font-size: 0.85rem; color: var(--gray-500); cursor: pointer; display: flex; align-items: center; gap: 8px; position: relative; }
-        .tab-nav button.active { color: var(--orange); }
-        .tab-nav button.active:after { content: ''; position: absolute; bottom: -9px; left: 0; width: 100%; height: 2px; background: var(--orange); }
-        
-        .tab-content { background: white; border: 1px solid var(--gray-200); border-radius: 20px; min-height: 400px; padding: 24px; }
-        .pipeline-list { display: flex; flex-direction: column; gap: 12px; }
-        .pipeline-step { background: var(--gray-100); padding: 14px 20px; border-radius: 12px; display: flex; align-items: center; gap: 16px; animation: slideIn 0.3s ease-out; }
-        .step-index { background: var(--white); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.7rem; font-weight: 800; color: var(--orange); }
-        .step-label { flex: 1; font-weight: 600; font-size: 0.9rem; }
-        .step-remove { background: transparent; border: none; color: var(--gray-400); cursor: pointer; }
-        
-        .insights-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
-        .insight-card { border: 1px solid var(--gray-100); border-radius: 12px; padding: 16px; }
-        .insight-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 12px; border-bottom: 1px solid var(--gray-50); padding-bottom: 8px; overflow: hidden; text-overflow: ellipsis; }
-        .insight-row { display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 6px; }
-        .insight-row strong.alert { color: var(--orange); }
-        
-        .data-view { display: flex; flex-direction: column; gap: 32px; }
-        .file-preview-block { border-bottom: 1px solid var(--gray-100); padding-bottom: 24px; }
-        .file-title { font-family: Syne; font-weight: 800; font-size: 0.85rem; margin-bottom: 12px; color: var(--gray-600); }
-        .table-mini-wrap { overflow-x: auto; font-size: 0.75rem; }
-        .table-mini-wrap table { width: 100%; border-collapse: collapse; }
-        .table-mini-wrap th { text-align: left; background: var(--gray-50); padding: 8px; border: 1px solid var(--gray-100); }
-        .table-mini-wrap td { padding: 8px; border: 1px solid var(--gray-100); }
-
-        .workspace-sidebar { width: 280px; background: var(--gray-100); border-radius: 20px; padding: 24px; position: sticky; top: 24px; }
-        .sidebar-header { font-family: Syne; font-weight: 700; font-size: 0.9rem; margin-bottom: 20px; }
-        .sidebar-stats { background: white; border-radius: 12px; padding: 16px; margin-bottom: 24px; }
-        .s-stat { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 10px; }
-        .btn-run-all { width: 100%; padding: 14px; background: var(--orange); color: white; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 10px 20px rgba(232, 105, 42, 0.2); }
-        
-        .jarvis-status { margin-top: 20px; padding: 12px; border-radius: 12px; font-size: 0.75rem; display: flex; align-items: center; gap: 8px; }
-        .jarvis-status.success { background: #f0fdf4; color: #166534; }
-        .jarvis-status.error { background: #fef2f2; color: #991b1b; }
-
-        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
-        @keyframes pulse { 0% { opacity: 0.6; transform: scale(1); } 50% { opacity: 1; transform: scale(1.2); } 100% { opacity: 0.6; transform: scale(1); } }
+        .jarvis-container { max-width: 1200px; margin: 0 auto; animation: fadeIn 0.5s ease-out; }
+        .jarvis-grid { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
+        .jarvis-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--gray-100); padding-bottom: 16px; }
+        .orb-small { width: 32px; height: 32px; background: var(--black); border-radius: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 10px #22c55e; margin-left: auto; }
+        .command-wrapper { display: flex; gap: 12px; background: var(--gray-100); padding: 8px 12px; border-radius: 16px; align-items: center; border: 1px solid transparent; transition: all 0.2s; margin-bottom: 24px; }
+        .command-wrapper:focus-within { background: white; border-color: var(--orange); box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        .term-icon { color: var(--gray-400); }
+        .jarvis-input { flex: 1; background: none; border: none; outline: none; font-family: 'Syne'; font-weight: 600; font-size: 1rem; color: var(--black); }
+        .btn-add-step { background: var(--black); color: white; border: none; padding: 8px 16px; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 0.8rem; }
+        .pipeline-workspace { flex: 1; background: #fafafa; border-radius: 20px; padding: 20px; border: 1px dashed var(--gray-300); }
+        .pipeline-label { font-size: 0.7rem; font-weight: 800; color: var(--gray-400); letter-spacing: 0.1em; margin-bottom: 16px; }
+        .pipeline-list { display: flex; flex-direction: column; gap: 10px; }
+        .empty-pipeline { text-align: center; color: var(--gray-400); font-size: 0.8rem; padding: 40px 20px; }
+        .pipeline-step-card { background: white; border: 1px solid var(--gray-200); padding: 12px 16px; border-radius: 14px; display: flex; align-items: center; gap: 16px; box-shadow: var(--shadow-sm); animation: slideRight 0.3s ease-out; }
+        .step-num { width: 24px; height: 24px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; color: var(--gray-500); }
+        .step-type { font-weight: 800; font-size: 0.8rem; text-transform: uppercase; color: var(--black); }
+        .step-details { font-size: 0.75rem; color: var(--gray-500); }
+        .step-remove { margin-left: auto; background: none; border: none; color: var(--gray-300); font-size: 1.2rem; cursor: pointer; transition: color 0.2s; }
+        .step-remove:hover { color: #ef4444; }
+        .btn-execute { width: 100%; margin-top: 20px; background: var(--black); color: white; border: none; padding: 16px; border-radius: 16px; font-weight: 700; font-family: 'Syne'; display: flex; align-items: center; justify-content: center; gap: 12px; cursor: pointer; transition: all 0.2s; }
+        .btn-execute:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.2); }
+        .btn-execute:disabled { opacity: 0.3; cursor: not-allowed; }
+        .insight-card { background: white; border: 1px solid var(--gray-200); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+        .insight-field { font-weight: 800; font-size: 0.9rem; margin-bottom: 8px; color: var(--black); }
+        .insight-meta { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--gray-500); }
+        .insight-alert { margin-top: 10px; display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #b91c1c; background: #fee2e2; padding: 6px 10px; border-radius: 8px; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideRight { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+        .spinner-white { width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );

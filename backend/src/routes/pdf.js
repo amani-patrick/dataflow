@@ -134,11 +134,32 @@ export default function pdfRoutes(upload) {
         XLSX.utils.book_append_sheet(wb, ws, sheetName);
         fs.unlinkSync(file.path);
       }
-      const outPath = path.join(__dirname, '../../uploads/', `dataflow_pdf_${Date.now()}.xlsx`);
+      
+      const fileName = `pdf_export_${Date.now()}.xlsx`;
+      const outPath = path.join(__dirname, '../../uploads/outputs/', fileName);
       XLSX.writeFile(wb, outPath);
-      res.download(outPath, 'dataflow_from_pdf.xlsx', () => { fs.unlink(outPath, () => {}); });
+
+      // Auto-cleanup after 1 hour
+      setTimeout(() => {
+        if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+      }, 3600000);
+
+      res.json({ 
+        success: true, 
+        downloadUrl: `/api/pdf/download/${fileName}`,
+        fileName 
+      });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.get('/download/:filename', (req, res) => {
+    const filePath = path.join(__dirname, '../../uploads/outputs/', req.params.filename);
+    if (fs.existsSync(filePath)) {
+      res.download(filePath);
+    } else {
+      res.status(404).send('File expired or not found.');
     }
   });
 

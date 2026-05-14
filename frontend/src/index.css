@@ -141,6 +141,68 @@ input, select, textarea {
   box-shadow: var(--shadow-sm);
 }
 
+/* Output Vault */
+.vault-panel {
+  margin-top: 32px;
+  background: white;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 20px;
+  padding: 24px;
+  animation: slideUp 0.5s ease-out;
+}
+.vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+.vault-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: var(--gray-50);
+  border-radius: 14px;
+  transition: all 0.2s;
+}
+.vault-item:hover {
+  background: white;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  transform: translateX(4px);
+}
+.v-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--black);
+}
+.v-time {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+.v-btn {
+  background: var(--black);
+  color: white;
+  text-decoration: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+.v-btn:hover {
+  background: var(--orange);
+  transform: scale(1.05);
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .tag {
   display: inline-flex;
   align-items: center;
